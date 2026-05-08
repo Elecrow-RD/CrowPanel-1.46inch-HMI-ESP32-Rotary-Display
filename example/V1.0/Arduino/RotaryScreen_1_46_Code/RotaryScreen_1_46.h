@@ -6,7 +6,6 @@
 #include <cst816t.h>
 #include <Wire.h>
 #include <lvgl.h>
-#include <WiFi.h>
 #include <Adafruit_NeoPixel.h>
 
 #include <demos/lv_demos.h>
@@ -27,11 +26,6 @@
 #define ENCODER_A_PIN   45
 #define ENCODER_B_PIN   42
 #define SWITCH_PIN      41
-
-/*    LED Light define    */
-#define POWER_LIGHT_PIN   40                                           
-#define LED_PIN           48
-#define LED_NUM           8  
 
 /*    BackLight PWM Set      */
 #define SCREEN_BACKLIGHT_PIN 46
