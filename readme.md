@@ -93,8 +93,8 @@ C:\Users\Documents\Arduino\libraries\
 | LCD CS         | GPIO9  |
 | LCD DC         | GPIO3  |
 | LCD RST        | GPIO14 |
-| Touch SDA      | GPIO38 |
-| Touch SCL      | GPIO39 |
+| Touch SDA      | GPIO6  |
+| Touch SCL      | GPIO7  |
 | Touch INT      | GPIO5  |
 | Touch RST      | GPIO13 |
 | Backlight      | GPIO46 |
@@ -103,4 +103,5 @@ C:\Users\Documents\Arduino\libraries\
 | Encoder Switch | GPIO41 |
 | Power LED      | GPIO40 |
 | RGB LED        | GPIO48 |
-
+| I2C_SDA        | GPIO38 |
+| I2C_SCL        | GPIO39 |
