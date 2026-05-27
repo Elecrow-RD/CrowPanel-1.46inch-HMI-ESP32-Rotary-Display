@@ -1,0 +1,187 @@
+esphome:
+  name: rotary-screen-146-display
+  friendly_name: Rotary_Screen_1.46_Display
+  platformio_options:
+    build_flags: "-DBOARD_HAS_PSRAM"
+    board_build.esp-idf.memory_type: qio_opi
+    board_build.flash_mode: dio
+  on_boot:
+    priority: 900
+    then:
+      - logger.log: "POWER ON"
+      - output.turn_on: VCC_5
+      - switch.turn_on: Vcc_3_Switch
+      - output.turn_on: Red_LED
+      - delay: 150ms
+      - light.turn_on:
+          id: display_backlight
+          brightness: 100%
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: y
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y
+      CONFIG_SPIRAM_RODATA: y
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+# Enable logging
+logger:
+
+debug:
+  update_interval: 30s
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "XSCr5HHOMRzn55Ch8+HfGYhnEevFL9OAxm8YJbkTr/U="
+
+ota:
+  - platform: esphome
+    password: "b0a0f8876c261e9413c3036c357d0675"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Rotary-Screen-146-Display"
+    password: "U51T8AKI6joe"
+
+captive_portal:
+  
+output:
+  - platform: ledc
+    id: backlight
+    pin: GPIO46    
+  - platform: gpio
+    id: VCC_5
+    pin: GPIO2      
+  - platform: gpio
+    id: Red_LED
+    pin: GPIO40        
+
+switch:
+  - platform: gpio
+    name: "VCC_3 Control"
+    id: Vcc_3_Switch
+    pin:
+      number: GPIO1
+      mode:
+        output: true
+    restore_mode: ALWAYS_ON
+    on_turn_on:
+      - logger.log: "GPIO1 is HIGH"
+
+light:
+  - platform: monochromatic
+    output: backlight
+    id: display_backlight
+    restore_mode: ALWAYS_ON  
+
+spi:
+  id: spi_bus
+  mosi_pin: 11
+  clk_pin: 10
+
+display:
+  - platform: ili9xxx                               # ILI9XXX display driver
+    id: round_display                               # Display ID
+    model: CUSTOM                                   # Custom display model
+    cs_pin: GPIO9                                   # SPI chip select pin
+    dc_pin: GPIO3                                   # Data/command pin
+    reset_pin: GPIO14                               # Display reset pin
+    dimensions:
+      width: 360                                    # Screen width (px)
+      height: 360                                   # Screen height (px)
+      offset_height: 0                              # Vertical offset
+    data_rate: 40MHz                                # SPI communication speed
+    color_order: RGB                                # RGB color order
+    invert_colors: false                            # No color inversion
+    init_sequence:                                  # Display initialization commands
+      - [0xDE, 0x00]
+      - [0xDF, 0x98, 0x55]
+      - [0xB2, 0x1F]
+      - [0xB7, 0x00, 0x1D, 0x00, 0x45]
+      - [0xBB, 0x1B, 0x64, 0xC4, 0x1E, 0x3E, 0xF5]
+      - [0xBC, 0x03, 0x20, 0xF3, 0xC0]
+      - [0xC0, 0x22, 0xA1]
+      - [0xC3, 0x00, 0x02, 0x2A, 0x0B, 0x08, 0x48, 0x08, 0x04, 0x62, 0x30, 0x30]
+      - [0xC4, 0x40, 0x00, 0xAD, 0x68, 0x43, 0x07, 0x04, 0x16, 0x43, 0x07, 0x04]
+      - [0xD3, 0x28, 0x13]
+      - [0xD9, 0x00, 0x00, 0xFF, 0x00, 0xF0, 0x00]
+      - [0xDE, 0x01]
+      - [0xB7, 0x13, 0xE7, 0x64, 0x39, 0x06, 0x36, 0x19, 0x1C]
+      - [0xBE, 0x00]
+      - [0xC1, 0x00, 0x4A, 0x80]
+      - [0xC2, 0x00, 0x16, 0xDA, 0xE7]
+      - [0xC7, 0x00, 0x00, 0x00, 0x38, 0x08, 0x08, 0x00, 0x01]
+      - [0xC8, 0x00, 0x00, 0x00, 0x00, 0x15, 0x3B]
+      - [0xC9, 0x00, 0x16, 0x06, 0x04, 0x0A]
+      - [0xCA, 0x08, 0x35, 0x16, 0x1F, 0x1F]
+      - [0xCB, 0x01, 0x16, 0x07, 0x05, 0x0B]
+      - [0xCC, 0x09, 0x35, 0x16, 0x1F, 0x1F]
+      - [0xCD, 0x01, 0x16, 0x09, 0x0B, 0x05]
+      - [0xCE, 0x07, 0x15, 0x1F, 0x16, 0x1F]
+      - [0xCF, 0x00, 0x16, 0x08, 0x0A, 0x04]
+      - [0xD0, 0x06, 0x15, 0x1F, 0x16, 0x1F]
+      - [0xD1, 0x02, 0x30]
+      - [0xD2, 0x02, 0x03, 0x52, 0xDF, 0xDD]
+      - [0xD3, 0x3B, 0x04, 0x48]
+      - [0xD5, 0x10, 0x10, 0x07, 0x07, 0x0F, 0x94, 0x26]
+      - [0xD6, 0x00, 0x00, 0x40]
+      - [0xD7, 0x00, 0x00, 0x20]
+      - [0xDE, 0x02]
+      - [0xB6, 0x1C]
+      - [0xDE, 0x00]
+      - [0x4D, 0x00]
+      - [0x4E, 0x00]
+      - [0x4F, 0x00]
+      - [0x4C, 0x01]
+      - [0x4C, 0x00]
+      - [0x36, 0x00]
+      - [0x35]
+      - [0x2A, 0x00, 0x00, 0x01, 0x67]
+      - [0x2B, 0x00, 0x00, 0x01, 0x67]
+      - [0x3A, 0x05]
+      - [0x11,120]
+      - [0x29,20]
+
+# ================= font =================
+font:                                           # Font configuration for display
+  - file: "gfonts://Roboto"                     # Load Roboto font from Google Fonts
+    id: roboto24                                # Unique ID for 24px Roboto font
+    size: 24                                    # Font size in pixels
+
+# ================= LVGL =================
+lvgl:                                           # LVGL graphics library config
+  displays:                                     # Link LVGL to display component
+    - round_display                             # Use the round_display component
+
+  default_font: roboto24                        # Set default font for LVGL widgets
+  disp_bg_color: white                          # ★ Set display background color to white
+
+  style_definitions:                            # Define reusable LVGL styles
+    - id: hello_style                           # Unique ID for style
+      text_font: roboto24                       # Use 24px Roboto font
+      text_color: 0x000000                      # ★ Set text color to black (hex)
+      bg_opa: TRANSP                            # Set background opacity to transparent
+      align: center                             # Align text to center
+      
+  pages:                                        # Define LVGL UI pages/screens
+    - id: hello_page                            # Unique ID for page
+      widgets:                                  # UI elements on this page
+        - label:                                # Add text label widget
+            id: hello_label                     # Unique ID for label
+            text: "Hello World!"                # Text to display
+            styles: hello_style                 # Apply hello_style to label
+            align: CENTER                       # Align label to center of display
+

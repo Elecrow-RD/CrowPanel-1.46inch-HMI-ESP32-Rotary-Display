@@ -1,0 +1,374 @@
+esphome:
+  name: 146-lvgl-interface
+  friendly_name: 1.46_LVGL_Interface
+  platformio_options:
+    build_flags: "-DBOARD_HAS_PSRAM"               # Enable PSRAM support
+    board_build.esp-idf.memory_type: qio_opi       # Set PSRAM memory type
+    board_build.flash_mode: dio                    # Set flash operating mode
+  on_boot:
+    priority: 900                                  # Boot execution priority
+    then:
+      - logger.log: "POWER ON"                     # Log boot start message
+      - output.turn_on: VCC_5                      # Power on 5V rail
+      - switch.turn_on: Vcc_3_Switch               # Power on 3.3V rail
+      - output.turn_on: Red_LED                    # Turn on status LED
+      - delay: 150ms                               # Short stabilization delay
+      - light.turn_on:
+          id: display_backlight                    # Target backlight component
+          brightness: 100%                          # Temporary full brightness
+      # Brightness initialization logic
+      - delay: 500ms                               # Delay for display hardware init
+      
+      # Initialize brightness and encoder (frozen state)
+      - lambda: |-
+          id(encoder_ready) = false;                // Disable encoder during boot
+          id(brightness_value) = 50;                // Set default brightness to 50%
+          
+          // Force reset rotary encoder internal state
+          id(knob).publish_state(0);               // Reset encoder counter to 0
+      
+      # Initial brightness (50%)
+      - light.turn_on:
+          id: display_backlight                    # Backlight light component
+          brightness: 0.5                          # Set 50% brightness (0.0-1.0)
+          
+      # Initialize LVGL text on startup (display 50%)
+      - lambda: |-
+          lv_arc_set_value(id(arc_brightness), id(brightness_value));
+          char buf[10];                                               // Buffer for percentage string
+          snprintf(buf, sizeof(buf), "%d%%", id(brightness_value));   // Format value
+          lv_label_set_text(id(lbl_brightness), buf);                 // Update label text
+          lv_refr_now(NULL);                                          // Force immediate display refresh
+      
+      # Wait for state reset to complete
+      - delay: 200ms                               # Ensure encoder reset finishes
+      
+      # Enable encoder after initialization
+      - lambda: |-
+          id(encoder_ready) = true;                // Enable encoder operation
+
+esp32:
+  board: esp32-s3-devkitc-1                        # Target ESP32-S3 board model
+  flash_size: 16MB                                 # Flash memory size
+  framework:
+    type: esp-idf                                  # Use ESP-IDF framework
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: y       # Set CPU clock to 240MHz
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y            # Enable 64KB data cache
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y          # Allow instructions from PSRAM
+      CONFIG_SPIRAM_RODATA: y                      # Allow read-only data from PSRAM
+
+psram:
+  mode: octal                                      # PSRAM operating mode
+  speed: 80MHz                                     # PSRAM clock speed
+
+# Enable logging
+logger:
+
+debug:
+  update_interval: 30s                             # Debug log update interval
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "9KR5Ts7RsVyKrBTU7UtPPct6DAo+ThrwLE6OY1Mt190="
+
+ota:
+  - platform: esphome
+    password: "8efe0c7e7ec5b46ff2835a07a62675a6"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "146-Lvgl-Interface"
+    password: "UMWQH1lXcNAT"
+
+captive_portal:
+
+    
+# Global variable definitions (persistent across runtime)
+globals:
+  - id: brightness_value                           # Global brightness storage
+    type: int                                       # Data type: integer
+    restore_value: false                            # Do not save to flash
+    initial_value: "50"                             # Default value: 50%
+
+  - id: encoder_ready                              # Encoder enable flag
+    type: bool                                      # Data type: boolean
+    restore_value: false                            # No flash restore
+    initial_value: "false"                          # Start disabled
+
+output:
+  - platform: ledc                                  # LEDC PWM output driver
+    id: backlight                                   # Backlight PWM ID
+    pin: GPIO46                                     # Backlight control pin
+    frequency: 5000Hz                               # PWM frequency
+  - platform: gpio                                  # GPIO output driver
+    id: VCC_5                                       # 5V power control
+    pin: GPIO2                                      # 5V enable pin
+  - platform: gpio                                  # GPIO output driver
+    id: Red_LED                                     # Red LED indicator
+    pin: GPIO40                                     # LED control pin
+
+switch:
+  - platform: gpio                                  # GPIO switch component
+    name: "VCC_3 Control"                           # Friendly name
+    id: Vcc_3_Switch                                # Switch ID
+    pin:
+      number: GPIO1                                 # 3.3V enable pin
+      mode:
+        output: true                                # Set as output mode
+    restore_mode: ALWAYS_ON                         # Always ON after boot
+    on_turn_on:
+      - logger.log: "GPIO1 is HIGH"                 # Log when enabled
+
+light:
+  - platform: monochromatic                         # Monochromatic light driver
+    output: backlight                               # Bind to PWM output
+    id: display_backlight                           # Light ID
+    restore_mode: ALWAYS_ON                         # Always ON after boot
+
+sensor:
+  - platform: rotary_encoder                        # Rotary encoder sensor
+    id: knob                                        # Encoder ID
+    name: "Encoder"                                 # Friendly name
+    pin_a:
+      number: 45                                    # Encoder phase A pin
+      mode:
+        input: true                                 # Set as input
+        pullup: true                                # Enable internal pull-up
+    pin_b:
+      number: 42                                    # Encoder phase B pin
+      mode:
+        input: true                                 # Set as input
+        pullup: true                                # Enable internal pull-up
+    resolution: 1                                   # Encoder resolution
+
+    filters:  # Anti-noise signal filters
+      - debounce: 20ms                              # Filter hardware jitter
+      - lambda: return round(x);                    # Convert to integer value
+
+    on_value:  # Trigger on encoder rotation
+      then:
+        - lambda: |-
+            if (!id(encoder_ready)) return;         // Skip if not initialized
+            static bool first_run = true;           // First run flag
+            static int last_encoder = 0;            // Last encoder state
+            int current = (int) id(knob).state;     // Current encoder value
+
+            if (first_run) {                        // Initialize baseline
+              last_encoder = current;
+              first_run = false;
+              return;
+            }
+
+            int delta = current - last_encoder;     // Calculate rotation change
+            last_encoder = current;                 // Update last value
+            if (delta == 0) return;                 // Ignore no movement
+
+            if (delta < 0) {                        // CCW: decrease brightness
+              id(brightness_value) -= 5;
+            } else {                                // CW: increase brightness
+              id(brightness_value) += 5;
+            }
+
+            if (id(brightness_value) < 0) id(brightness_value) = 0;       // Min limit
+            if (id(brightness_value) > 100) id(brightness_value) = 100;   // Max limit
+
+            float level = id(brightness_value) / 100.0f;                  // Convert to 0.0-1.0
+            id(backlight).set_level(level);                               // Set PWM output
+
+            lv_arc_set_value(id(arc_brightness), id(brightness_value));   // Update arc
+            char buf[10];                                                 // String buffer
+            snprintf(buf, sizeof(buf), "%d%%", id(brightness_value));     // Format text
+            lv_label_set_text(id(lbl_brightness), buf);                   // Update label
+            lv_refr_now(NULL);                                            // Refresh display
+
+i2c:
+  - id: i2c_touch                                  # I2C bus for touchscreen
+    sda: 6                                          # I2C data pin
+    scl: 7                                          # I2C clock pin
+    scan: true                                      # Auto-scan I2C devices
+    frequency: 400kHz                               # I2C bus speed
+
+touchscreen:
+  platform: cst816                                  # CST816 touch driver
+  id: my_touchscreen                                # Touchscreen ID
+  interrupt_pin: 5                                  # Touch interrupt pin
+  reset_pin: 13                                     # Touch reset pin
+  i2c_id: i2c_touch                                 # Bind to I2C bus
+  address: 0x15                                     # I2C address
+  transform:
+    mirror_x: false                                 # No X mirroring
+    mirror_y: true                                  # Enable Y mirroring
+    swap_xy: true                                   # Swap X and Y axes
+  on_touch:
+    - logger.log:
+        format: "Touch at (%d, %d)"                 # Log touch coordinates
+        args: [touch.x, touch.y]
+    - lambda: |-
+        ESP_LOGI("cal", "x=%d, y=%d, x_raw=%d, y_raw=%d",  // Debug touch data
+        touch.x,
+        touch.y,
+        touch.x_raw,
+        touch.y_raw
+        );
+
+# ================= Fonts & Images (LVGL Resources) =================
+font:  # Font definitions for LVGL UI
+  - file: "gfonts://Montserrat"                     # Montserrat font source
+    id: montserrat_20                               # Font ID (20px)
+    size: 20                                        # Font size in pixels
+  - file: "gfonts://Montserrat"                     # Montserrat font source
+    id: montserrat_24                               # Font ID (24px)
+    size: 24                                        # Font size in pixels
+  - file: "gfonts://Montserrat"                     # Montserrat font source
+    id: montserrat_36                               # Font ID (36px)
+    size: 36                                        # Font size in pixels
+  - file: "gfonts://Montserrat"                     # Montserrat font source
+    id: montserrat_56                               # Font ID (56px)
+    size: 56                                        # Font size in pixels
+  - file: "gfonts://Montserrat"                     # Montserrat font source
+    id: montserrat_16                               # Font ID (16px)
+    size: 16                                        # Font size in pixels
+  - file: "gfonts://Montserrat"                     # Montserrat font source
+    id: montserrat_14                               # Font ID (14px)
+    size: 14                                        # Font size in pixels
+  - file: "gfonts://Montserrat"                     # Montserrat font source
+    id: montserrat_12                               # Font ID (12px)
+    size: 12                                        # Font size in pixels
+
+image:  # Image assets for LVGL UI
+  - file: "bj_light_1_360x360.png"                  # Background image file
+    id: img_bg_light                                # Image resource ID
+    resize: 360x360                                 # Resize to screen size
+    type: RGB565                                    # Display color format
+
+spi:
+  id: spi_bus                                       # SPI bus ID
+  mosi_pin: 11                                      # SPI MOSI pin
+  clk_pin: 10                                       # SPI clock pin
+  
+display:
+  - platform: ili9xxx                               # ILI9XXX display driver
+    id: round_display                               # Display ID
+    model: CUSTOM                                   # Custom display model
+    cs_pin: GPIO9                                   # SPI chip select pin
+    dc_pin: GPIO3                                   # Data/command pin
+    reset_pin: GPIO14                               # Display reset pin
+    dimensions:
+      width: 360                                    # Screen width (px)
+      height: 360                                   # Screen height (px)
+      offset_height: 0                              # Vertical offset
+    data_rate: 40MHz                                # SPI communication speed
+    color_order: RGB                                # RGB color order
+    invert_colors: false                            # No color inversion
+    init_sequence:                                  # Display initialization commands
+      - [0xDE, 0x00]
+      - [0xDF, 0x98, 0x55]
+      - [0xB2, 0x1F]
+      - [0xB7, 0x00, 0x1D, 0x00, 0x45]
+      - [0xBB, 0x1B, 0x64, 0xC4, 0x1E, 0x3E, 0xF5]
+      - [0xBC, 0x03, 0x20, 0xF3, 0xC0]
+      - [0xC0, 0x22, 0xA1]
+      - [0xC3, 0x00, 0x02, 0x2A, 0x0B, 0x08, 0x48, 0x08, 0x04, 0x62, 0x30, 0x30]
+      - [0xC4, 0x40, 0x00, 0xAD, 0x68, 0x43, 0x07, 0x04, 0x16, 0x43, 0x07, 0x04]
+      - [0xD3, 0x28, 0x13]
+      - [0xD9, 0x00, 0x00, 0xFF, 0x00, 0xF0, 0x00]
+      - [0xDE, 0x01]
+      - [0xB7, 0x13, 0xE7, 0x64, 0x39, 0x06, 0x36, 0x19, 0x1C]
+      - [0xBE, 0x00]
+      - [0xC1, 0x00, 0x4A, 0x80]
+      - [0xC2, 0x00, 0x16, 0xDA, 0xE7]
+      - [0xC7, 0x00, 0x00, 0x00, 0x38, 0x08, 0x08, 0x00, 0x01]
+      - [0xC8, 0x00, 0x00, 0x00, 0x00, 0x15, 0x3B]
+      - [0xC9, 0x00, 0x16, 0x06, 0x04, 0x0A]
+      - [0xCA, 0x08, 0x35, 0x16, 0x1F, 0x1F]
+      - [0xCB, 0x01, 0x16, 0x07, 0x05, 0x0B]
+      - [0xCC, 0x09, 0x35, 0x16, 0x1F, 0x1F]
+      - [0xCD, 0x01, 0x16, 0x09, 0x0B, 0x05]
+      - [0xCE, 0x07, 0x15, 0x1F, 0x16, 0x1F]
+      - [0xCF, 0x00, 0x16, 0x08, 0x0A, 0x04]
+      - [0xD0, 0x06, 0x15, 0x1F, 0x16, 0x1F]
+      - [0xD1, 0x02, 0x30]
+      - [0xD2, 0x02, 0x03, 0x52, 0xDF, 0xDD]
+      - [0xD3, 0x3B, 0x04, 0x48]
+      - [0xD5, 0x10, 0x10, 0x07, 0x07, 0x0F, 0x94, 0x26]
+      - [0xD6, 0x00, 0x00, 0x40]
+      - [0xD7, 0x00, 0x00, 0x20]
+      - [0xDE, 0x02]
+      - [0xB6, 0x1C]
+      - [0xDE, 0x00]
+      - [0x4D, 0x00]
+      - [0x4E, 0x00]
+      - [0x4F, 0x00]
+      - [0x4C, 0x01]
+      - [0x4C, 0x00]
+      - [0x36, 0x00]
+      - [0x35]
+      - [0x2A, 0x00, 0x00, 0x01, 0x67]
+      - [0x2B, 0x00, 0x00, 0x01, 0x67]
+      - [0x3A, 0x05]
+      - [0x11,120]
+      - [0x29,20]
+
+lvgl:  # LVGL graphics library configuration
+  displays:
+    - round_display                                # Bind to round display
+  buffer_size: 50%                                 # Use 50% PSRAM for buffer
+
+  widgets:  # UI widget definitions (bottom to top)
+    - image:  # Background image widget
+        align: CENTER                              # Align to screen center
+        id: img_bg                                 # Widget ID
+        src: img_bg_light                          # Bind to image resource
+        width: 360                                 # Full screen width
+        height: 360                                # Full screen height
+        antialias: true                            # Enable anti-aliasing
+
+    - label:  # Brightness title label
+        align: CENTER                              # Align to center
+        id: lbl_title                              # Widget ID
+        y: -70                                     # Offset upward
+        text_font: montserrat_24                   # Use 24px font
+        text: "Brightness"                         # Display text
+        text_color: 0xFFFFFF                       # White text color
+        text_opa: "100%"                           # Full opacity
+
+    - arc:  # Brightness arc indicator
+        align: CENTER                              # Align to center
+        id: arc_brightness                         # Widget ID
+        value: 50                                  # Default value
+        min_value: 0                                # Minimum value
+        max_value: 100                              # Maximum value
+        start_angle: 135                            # Arc start angle
+        end_angle: 45                              # Arc end angle
+        width: 260                                 # Widget width
+        height: 260                                # Widget height
+        
+        arc_color: 0x1A1A1A                        # Background arc color
+        arc_width: 18                              # Background arc thickness
+        arc_rounded: true                          # Rounded ends
+        
+        indicator:                                  # Progress indicator
+          arc_color: 0x00D2FF                      # Indicator color
+          arc_width: 18                            # Indicator thickness
+          arc_rounded: true                        # Rounded ends
+          
+        knob:                                       # Arc knob
+          bg_color: 0xFFFFFF                        # Knob color
+          bg_opa: "100%"                            # Full opacity
+          width: 32                                 # Knob width
+          height: 32                                # Knob height
+          radius: 10                               # Circular knob
+
+    - label:  # Brightness percentage label
+        align: CENTER                              # Align to center
+        id: lbl_brightness                         # Widget ID
+        text_font: montserrat_56                   # Use 56px large font
+        text: "50%"                                # Default text
+        text_color: 0xFFFFFF                       # White text color
+        text_opa: "100%"                           # Full opacity

@@ -1,0 +1,288 @@
+esphome:
+  name: 146-adjust-screen-brightness              # Device name in ESPHome
+  friendly_name: 1.46_Adjust_Screen_Brightness    # Friendly display name
+  platformio_options:
+    build_flags: "-DBOARD_HAS_PSRAM"               # Enable PSRAM support
+    board_build.esp-idf.memory_type: qio_opi       # Set PSRAM memory type
+    board_build.flash_mode: dio                    # Set flash operating mode
+  on_boot:
+    priority: 900
+    then:
+      - logger.log: "POWER ON"
+      - output.turn_on: VCC_5
+      - switch.turn_on: Vcc_3_Switch
+      - output.turn_on: Red_LED
+      - delay: 150ms
+      - light.turn_on:
+          id: display_backlight
+          brightness: 100%
+      # Brightness initialization logic
+      - delay: 500ms                                 # Longer delay for display initialization
+      
+      # Initialize brightness and encoder (frozen state)
+      - lambda: |-
+          id(encoder_ready) = false;            // Disable encoder processing during init
+          id(brightness_value) = 50;            // Set initial brightness value to 50%
+          
+          // Force rotary_encoder internal state alignment
+          id(knob).publish_state(0);             // Reset rotary encoder internal counter to 0
+      
+      # Initial brightness (50%)
+      - light.turn_on:
+          id: display_backlight                             # Target backlight light component
+          brightness: 0.5                            # Set initial brightness to 50% (0.0-1.0 range)
+          
+      # Initialize LVGL text on startup (display 50%)
+      - lambda: |-
+          char buf[10];                         // Character buffer for brightness text (10 chars max)
+          snprintf(buf, sizeof(buf), "%d%%", id(brightness_value)); // Format value as percentage string
+          lv_label_set_text(id(lbl_brightness), buf); // Update LVGL label with brightness value
+          lv_refr_now(NULL);                    // Force immediate LVGL display refresh
+      
+      # Wait to ensure publish_state takes effect
+      - delay: 200ms                                 # Delay to ensure encoder state reset completes
+      
+      # Enable encoder after initialization
+      - lambda: |-
+          id(encoder_ready) = true;             // Enable encoder processing after init complete
+
+esp32:
+  board: esp32-s3-devkitc-1                        # Target ESP32-S3 board model
+  flash_size: 16MB                                 # Flash memory size
+  framework:
+    type: esp-idf                                  # Use ESP-IDF framework
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: y       # Set CPU clock to 240MHz
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y            # Enable 64KB data cache
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: y          # Allow instructions from PSRAM
+      CONFIG_SPIRAM_RODATA: y                      # Allow read-only data from PSRAM
+
+psram:
+  mode: octal                                      # PSRAM operating mode
+  speed: 80MHz                                     # PSRAM clock speed
+
+# Enable logging
+logger:                                             # System logging component
+
+debug:
+  update_interval: 30s                             # Debug log update interval
+
+# Enable Home Assistant API
+api:                                                # Home Assistant API interface
+  encryption:
+    key: "Y8EYscTe8SGN1/ODmJTqXoSMZ1h5pt3UL6HWFbhTRd4="  # API encryption key
+
+ota:
+  - platform: esphome                               # OTA update platform
+    password: "e0d040a9f5eb7281aee59745d420d668"    # OTA security password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) if WiFi fails
+  ap:                                              # Fallback access point
+    ssid: "146-Adjust-Screen-Brightness"           # AP name when WiFi offline
+    password: "Bf3LZhmWeoOt"                       # AP password
+
+captive_portal:                                     # Enable captive portal for AP mode
+
+# Global variable definitions (persistent across device runtime)
+globals:
+  - id: brightness_value                             # Global ID for brightness value storage
+    type: int                                        # Data type: integer
+    restore_value: false                             # Don't restore value from flash on reboot
+    initial_value: "50"                              # Initial value: 50 (percent)
+
+  - id: encoder_ready                                # Global ID for encoder readiness flag
+    type: bool                                       # Data type: boolean (true/false)
+    restore_value: false                             # Don't restore value from flash on reboot
+    initial_value: "false"                           # Initial state: encoder disabled
+
+output:
+  - platform: ledc
+    id: backlight
+    pin: GPIO46    
+  - platform: gpio
+    id: VCC_5
+    pin: GPIO2      
+  - platform: gpio
+    id: Red_LED
+    pin: GPIO40        
+
+switch:
+  - platform: gpio
+    name: "VCC_3 Control"
+    id: Vcc_3_Switch
+    pin:
+      number: GPIO1
+      mode:
+        output: true
+    restore_mode: ALWAYS_ON
+    on_turn_on:
+      - logger.log: "GPIO1 is HIGH"
+
+light:
+  - platform: monochromatic
+    output: backlight
+    id: display_backlight
+    restore_mode: ALWAYS_ON  
+
+sensor:
+  - platform: rotary_encoder
+    id: knob
+    name: "Encoder"
+    pin_a:
+      number: 45
+      mode:
+        input: true
+        pullup: true
+    pin_b:
+      number: 42
+      mode:
+        input: true
+        pullup: true
+    resolution: 1
+    filters:
+      - debounce: 20ms                               # Debounce filter to reduce noise (20ms)
+      - lambda: return round(x);                     # Round encoder value to integer
+
+    # Action to execute when encoder value changes
+    on_value:
+      then:
+        - lambda: |-
+            if (!id(encoder_ready)) return;          // Ignore input if encoder not ready (init phase)
+
+            static bool first_run = true;            // Static flag for first encoder update
+            static int last_encoder = 0;             // Static storage for previous encoder value
+
+            int current = (int) id(knob).state;      // Get current encoder state as integer
+
+            if (first_run) {
+              last_encoder = current;                // Set initial baseline for encoder value
+              first_run = false;                     // Clear first run flag
+              return;                                // Skip processing on first run
+            }
+
+            int delta = current - last_encoder;      // Calculate change in encoder position
+            last_encoder = current;                  // Update last encoder value
+            if (delta == 0) return;                  // Skip if no actual movement detected
+
+            // Step adjustment (5% per encoder step)
+            if (delta < 0) {
+              id(brightness_value) -= 5;             // Decrease brightness by 5% for counter-clockwise
+            } else {
+              id(brightness_value) += 5;             // Increase brightness by 5% for clockwisea
+            }
+
+            // Clamp brightness range between 0-100%
+            if (id(brightness_value) < 0) id(brightness_value) = 0;
+            if (id(brightness_value) > 100) id(brightness_value) = 100;
+
+            // Write PWM directly (no queue, no delay)
+            float level = id(brightness_value) / 100.0f; // Convert percentage to 0.0-1.0 range
+            id(backlight).set_level(level);    // Set PWM output level immediately
+
+            // Update LVGL display (slower but non-blocking for brightness)
+            char buf[10];                               // Character buffer for display text
+            snprintf(buf, sizeof(buf), "%d%%", id(brightness_value)); // Format as percentage string
+            lv_label_set_text(id(lbl_brightness), buf);  // Update brightness label text
+            lv_refr_now(NULL);                          // Force immediate display refresh
+
+spi:
+  id: spi_bus
+  mosi_pin: 11
+  clk_pin: 10
+  
+display:
+  - platform: ili9xxx                               # ILI9XXX display driver
+    id: round_display                               # Display ID
+    model: CUSTOM                                   # Custom display model
+    cs_pin: GPIO9                                   # SPI chip select pin
+    dc_pin: GPIO3                                   # Data/command pin
+    reset_pin: GPIO14                               # Display reset pin
+    dimensions:
+      width: 360                                    # Screen width (px)
+      height: 360                                   # Screen height (px)
+      offset_height: 0                              # Vertical offset
+    data_rate: 40MHz                                # SPI communication speed
+    color_order: RGB                                # RGB color order
+    invert_colors: false                            # No color inversion
+    init_sequence:                                  # Display initialization commands
+      - [0xDE, 0x00]
+      - [0xDF, 0x98, 0x55]
+      - [0xB2, 0x1F]
+      - [0xB7, 0x00, 0x1D, 0x00, 0x45]
+      - [0xBB, 0x1B, 0x64, 0xC4, 0x1E, 0x3E, 0xF5]
+      - [0xBC, 0x03, 0x20, 0xF3, 0xC0]
+      - [0xC0, 0x22, 0xA1]
+      - [0xC3, 0x00, 0x02, 0x2A, 0x0B, 0x08, 0x48, 0x08, 0x04, 0x62, 0x30, 0x30]
+      - [0xC4, 0x40, 0x00, 0xAD, 0x68, 0x43, 0x07, 0x04, 0x16, 0x43, 0x07, 0x04]
+      - [0xD3, 0x28, 0x13]
+      - [0xD9, 0x00, 0x00, 0xFF, 0x00, 0xF0, 0x00]
+      - [0xDE, 0x01]
+      - [0xB7, 0x13, 0xE7, 0x64, 0x39, 0x06, 0x36, 0x19, 0x1C]
+      - [0xBE, 0x00]
+      - [0xC1, 0x00, 0x4A, 0x80]
+      - [0xC2, 0x00, 0x16, 0xDA, 0xE7]
+      - [0xC7, 0x00, 0x00, 0x00, 0x38, 0x08, 0x08, 0x00, 0x01]
+      - [0xC8, 0x00, 0x00, 0x00, 0x00, 0x15, 0x3B]
+      - [0xC9, 0x00, 0x16, 0x06, 0x04, 0x0A]
+      - [0xCA, 0x08, 0x35, 0x16, 0x1F, 0x1F]
+      - [0xCB, 0x01, 0x16, 0x07, 0x05, 0x0B]
+      - [0xCC, 0x09, 0x35, 0x16, 0x1F, 0x1F]
+      - [0xCD, 0x01, 0x16, 0x09, 0x0B, 0x05]
+      - [0xCE, 0x07, 0x15, 0x1F, 0x16, 0x1F]
+      - [0xCF, 0x00, 0x16, 0x08, 0x0A, 0x04]
+      - [0xD0, 0x06, 0x15, 0x1F, 0x16, 0x1F]
+      - [0xD1, 0x02, 0x30]
+      - [0xD2, 0x02, 0x03, 0x52, 0xDF, 0xDD]
+      - [0xD3, 0x3B, 0x04, 0x48]
+      - [0xD5, 0x10, 0x10, 0x07, 0x07, 0x0F, 0x94, 0x26]
+      - [0xD6, 0x00, 0x00, 0x40]
+      - [0xD7, 0x00, 0x00, 0x20]
+      - [0xDE, 0x02]
+      - [0xB6, 0x1C]
+      - [0xDE, 0x00]
+      - [0x4D, 0x00]
+      - [0x4E, 0x00]
+      - [0x4F, 0x00]
+      - [0x4C, 0x01]
+      - [0x4C, 0x00]
+      - [0x36, 0x00]
+      - [0x35]
+      - [0x2A, 0x00, 0x00, 0x01, 0x67]
+      - [0x2B, 0x00, 0x00, 0x01, 0x67]
+      - [0x3A, 0x05]
+      - [0x11,120]
+      - [0x29,20]
+
+# ================= font =================
+font:                                           # Font configuration for display
+  - file: "gfonts://Roboto"                     # Load Roboto font from Google Fonts
+    id: roboto24                                # Unique ID for 24px Roboto font
+    size: 24                                    # Font size in pixels
+
+# LVGL (Light and Versatile Graphics Library) configuration
+lvgl:
+  displays:
+    - round_display                                  # Link LVGL to our display component
+  buffer_size: 50%                                   # Use 50% of available RAM for LVGL buffer
+
+  # LVGL UI layout - brightness title and percentage
+  widgets:
+    # Title label widget
+    - label:
+        align: CENTER                                # Align text to center of display
+        id: lbl_title                                # Unique ID for title label
+        y: -30                                       # Y position offset (30px up from center)
+        text_font: montserrat_22                     # Font type and size (Montserrat 22pt)
+        text: "Screen Brightness"                    # Default text for title
+
+    # Brightness percentage label widget
+    - label:
+        align: CENTER                                # Align text to center of display
+        id: lbl_brightness                           # Unique ID for brightness label
+        y: 20                                        # Y position offset (20px down from center)
+        text_font: montserrat_48                     # Font type and size (Montserrat 48pt)
+        text: "50%"                                  # Default brightness text
