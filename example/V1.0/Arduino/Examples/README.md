@@ -1,0 +1,3 @@
+# ESP32-S3 1.46 examples
+
+These six sketches are hardware-adapted versions of `1.28Examples`. They target the 360x360 ST77961 display on the 1.46 board: LCD SPI 10/11/3/9/14, touch I2C SDA/SCL 6/7 with CST816T reset/interrupt 13/5, backlight GPIO46, power rails GPIO1/2, and indicator GPIO40. Encoder pins remain 45/42/button 41; DHT20 uses `Wire1` on 38/39. Each lesson that needs the shared display hardware includes its own Common_1_46.h, so every folder can be opened independently. Make the bundled `Arduino/RotaryScreen_1_46_Code_Core3_LVGL9/libraries` available as the sketchbook library directory.
